@@ -1,0 +1,65 @@
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
+
+# Install necessary packages
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    sudo git zip curl \
+    libopencv-dev libffi-dev liblapack-dev libsqlite3-dev \
+    build-essential libssl-dev libbz2-dev libreadline-dev \
+    ssh-client wget vim python3-opencv &&\
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# User setting
+ARG UID
+RUN useradd docker -l -u 1000 -G sudo -s /bin/bash -m
+RUN echo 'Defaults visiblepw' >> /etc/sudoers
+RUN echo 'docker ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+USER docker
+
+# Python environment setup
+ENV PYENV_ROOT /home/docker/.pyenv
+ENV PATH $PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH
+RUN curl -L https://pyenv.run | bash
+ARG PYTHON_VERSION
+RUN pyenv install ${PYTHON_VERSION} && pyenv global ${PYTHON_VERSION}
+
+# Install Torch, Torchvision, and other dependencies
+ARG TORCH_VERSION
+ARG TORCHVISION_VERSION
+ARG TORCH_CUDA_ARCH_LIST
+RUN pip install --upgrade pip setuptools wheel
+RUN pip install torch==${TORCH_VERSION} --index-url https://download.pytorch.org/whl/cu116 \
+    torchvision==${TORCHVISION_VERSION} torchaudio
+
+# Install MMCV and MIM
+ARG MIM_VERSION
+ARG MMCV_VERSION
+RUN pip install -U openmim==${MIM_VERSION}
+RUN mim install mmcv-full==${MMCV_VERSION}
+
+# Clone and install MMDetection
+ARG MMDET_VERSION
+WORKDIR /home/docker/
+RUN git config --global http.postBuffer 524288000
+RUN git clone https://github.com/open-mmlab/mmdetection.git mmdetection -b v${MMDET_VERSION} --depth 1
+WORKDIR /home/docker/mmdetection
+RUN pip install --no-cache-dir -e .
+
+# Install additional requirements
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
+
+# Install lane NMS
+COPY --chown=docker libs/models/layers/nms /tmp/nms
+WORKDIR /tmp/nms
+RUN python /tmp/nms/setup.py install
+
+# Set Python path
+ENV PYTHONPATH $PYTHONPATH:/work
+ENV PYTHONPATH $PYTHONPATH:/home/docker/
+
+# Final working directory
+WORKDIR /work
+
+# Default entry point
+ENTRYPOINT ["/bin/bash"]
